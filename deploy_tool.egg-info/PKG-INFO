@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: deploy-tool
+Version: 0.1
+Requires-Dist: click
+Requires-Dist: boto3
+Dynamic: requires-dist
