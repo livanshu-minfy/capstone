@@ -76,7 +76,7 @@ def init(repo_url):
     shutil.rmtree(tmp_dir, ignore_errors=True)  # <--
 
 # ----------------------
-# 🔍 React Detector
+# 🔍 Path Detector
 # ----------------------
 
 def find_react_project_path(root):
@@ -93,10 +93,6 @@ def find_react_project_path(root):
             except Exception:
                 continue
     return None
-
-# ----------------------
-# 🔍 Angular Detector
-# ----------------------
 
 def find_angular_project_path(root):
     """Recursively search for the first folder containing a package.json with Angular dependencies or angular.json file."""
@@ -125,6 +121,34 @@ def find_angular_project_path(root):
     return None
 
 
+def find_react_vite_project_path(root):
+    """Recursively search for the first folder containing a React + Vite project."""
+    for dirpath, _, filenames in os.walk(root):
+        # Check for vite.config file (primary indicator of Vite project)
+        vite_config_files = ['vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.cjs']
+        has_vite_config = any(config in filenames for config in vite_config_files)
+        
+        if has_vite_config and 'package.json' in filenames:
+            try:
+                with open(os.path.join(dirpath, 'package.json')) as f:
+                    package_data = json.load(f)
+                    deps = package_data.get("dependencies", {})
+                    dev_deps = package_data.get("devDependencies", {})
+                    
+                    # Check for React dependencies
+                    has_react = "react" in deps or "react" in dev_deps
+                    # Check for Vite dependencies
+                    has_vite = "vite" in dev_deps or "@vitejs/plugin-react" in dev_deps
+                    
+                    if has_react and has_vite:
+                        return dirpath
+                        
+            except Exception:
+                continue
+    return None
+
+
+
 # ----------------------
 # 📥 Git Cloner
 # ----------------------
@@ -151,23 +175,28 @@ def clone_repository(repo_url, tmp_dir):
         return False
 
 def detect_framework(project_path):
-    """Detects if the project is React, Angular, or Next.js."""
+    """Detects if the project is Next.js, Angular, React + Vite, or React."""
     for dirpath, _, filenames in os.walk(project_path):
         if 'package.json' in filenames:
             try:
                 with open(os.path.join(dirpath, 'package.json')) as f:
-                    package_data = json.load(f)
-                    deps = package_data.get("dependencies", {})
-                    dev_deps = package_data.get("devDependencies", {})
-                    all_deps = {**deps, **dev_deps}
+                    pkg = json.load(f)
+                deps = pkg.get("dependencies", {})
+                dev_deps = pkg.get("devDependencies", {})
+                all_deps = {**deps, **dev_deps}
 
-                    # ✅ Detect nextjs before react
-                    if "next" in all_deps:
-                        return "nextjs"
-                    if "@angular/core" in all_deps:
-                        return "angular"
-                    if "react" in all_deps:
-                        return "react"
+                # Order matters: check most specific frameworks first
+                if "next" in all_deps:
+                    return "nextjs"
+                if "@angular/core" in all_deps:
+                    return "angular"
+                # Detect React + Vite: look for both React and Vite packages
+                if ("react" in all_deps and 
+                    ("vite" in all_deps or "@vitejs/plugin-react" in all_deps)):
+                    return "react-vite"
+                # Fallback to plain React
+                if "react" in all_deps:
+                    return "react"
             except Exception:
                 continue
     return None
@@ -197,14 +226,17 @@ def deploy(environment):
 
     if framework == "react":
         deploy_react(tmp_dir, environment)
+    elif framework == "react-vite":
+        deploy_react_vite(tmp_dir, environment)    # <-- Handle React + Vite
     elif framework == "angular":
-        deploy_angular(tmp_dir, environment)  # <-- Add this line
+        deploy_angular(tmp_dir, environment)
     elif framework == "nextjs":
         deploy_dockerized(tmp_dir, framework, environment)
     else:
         click.echo("❌ Unsupported framework.")
 
     shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 
 def deploy_dockerized(tmp_dir, framework, environment):
@@ -356,14 +388,19 @@ def deploy_angular(project_root, environment):
     click.echo(f"⚙️ Building Angular app at: {angular_path}")
     is_windows = platform.system() == "Windows"
     shell_flag = True if is_windows else False
+
+    # Ensure legacy OpenSSL provider for Node 17+ / OpenSSL 3.0 compatibility
+    build_env = os.environ.copy()
+    build_env["NODE_OPTIONS"] = "--openssl-legacy-provider"
+
     try:
-        subprocess.run(['npm', 'install'], cwd=angular_path, check=True, shell=shell_flag)
+        subprocess.run(['npm', 'install'], cwd=angular_path, check=True, shell=shell_flag, env=build_env)
         subprocess.run(
             ['ng', 'build', '--configuration=production'],
-            cwd=angular_path, check=True, shell=shell_flag
+            cwd=angular_path, check=True, shell=shell_flag, env=build_env
         )
     except subprocess.CalledProcessError:
-        click.echo("❌ Build failed. Ensure it's a valid Angular project.")
+        click.echo("❌ Build failed. Ensure it's a valid Angular project and Node options are supported.")
         return
 
     # 3. Locate build output directory containing index.html
@@ -401,6 +438,82 @@ def deploy_angular(project_root, environment):
     if not bucket:
         click.echo(f"🪣 Creating new bucket for env: {environment}")
         bucket = create_public_s3_bucket(prefix=f"{environment}-angular-site", region=region)
+        if not bucket:
+            click.echo("❌ Failed to create bucket.")
+            return
+        save_bucket_config(bucket, region=region, environment=environment)
+
+    # 5. Upload to S3 using AWS CLI
+    click.echo("📤 Uploading via AWS CLI using s3 sync...")
+    try:
+        subprocess.run(
+            ["aws", "s3", "sync", build_dir, f"s3://{bucket}", "--delete"],
+            check=True
+        )
+    except subprocess.CalledProcessError:
+        click.echo("❌ AWS CLI sync failed. Ensure AWS CLI is installed and configured.")
+        return
+
+    # 6. Enable website hosting
+    enable_static_website(bucket)
+
+    # 7. Output public URL
+    public_url = get_website_url(bucket, region)
+    click.echo(f"🌐 Site deployed: {public_url}")
+
+
+
+def deploy_react_vite(project_root, environment):
+    """🚀 Build & deploy a React + Vite project in the given environment."""
+
+    # 1. Find React + Vite project root
+    react_vite_path = find_react_vite_project_path(project_root)
+    if not react_vite_path:
+        click.echo("❌ No React + Vite project found in the repo.")
+        return
+
+    # 2. Build
+    click.echo(f"⚙️ Building React + Vite app at: {react_vite_path}")
+    is_windows = platform.system() == "Windows"
+    shell_flag = True if is_windows else False
+    try:
+        subprocess.run(['npm', 'install'], cwd=react_vite_path, check=True, shell=shell_flag)
+        subprocess.run(
+            ['npm', 'run', 'build'],
+            cwd=react_vite_path, check=True, shell=shell_flag
+        )
+    except subprocess.CalledProcessError:
+        click.echo("❌ Build failed. Ensure it's a valid React + Vite project.")
+        return
+
+    # 3. Locate build output directory
+    build_dir = os.path.join(react_vite_path, 'dist')
+    if not os.path.exists(build_dir):
+        click.echo("❌ Build folder not found.")
+        return
+
+    # Verify index.html exists in the build directory
+    if not os.path.exists(os.path.join(build_dir, 'index.html')):
+        click.echo("❌ index.html not found in build output.")
+        return
+
+    # 4. Create (or verify) env bucket
+    state = load_bucket_config()
+    bucket = None
+    region = "ap-south-1"
+
+    if state and state.get("env") == environment:
+        candidate = state.get("bucket")
+        if bucket_exists(candidate):
+            bucket = candidate
+            region = get_bucket_region(candidate) or region
+            click.echo(f"🔁 Reusing bucket: {bucket} (env={environment})")
+        else:
+            click.echo(f"⚠️ Config refers to a deleted/missing bucket: {candidate}. Recreating...")
+
+    if not bucket:
+        click.echo(f"🪣 Creating new bucket for env: {environment}")
+        bucket = create_public_s3_bucket(prefix=f"{environment}-react-vite-site", region=region)
         if not bucket:
             click.echo("❌ Failed to create bucket.")
             return
