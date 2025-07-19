@@ -2,21 +2,23 @@ import boto3
 import json
 import uuid
 import os
-import paramiko
 import time
 import socket
+import subprocess
+import shlex
 from botocore.exceptions import ClientError
-from scp import SCPClient
 from .config import load_bucket_config, CONFIG_FILE
 
 REGION = "ap-south-1"
-KEY_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "livanshu-kp.pem"))
+KEY_PATH = "./livanshu-kp.pem"
+os.chmod(KEY_PATH, 0o400)
+REMOTE_USER = "ec2-user"
 
 def generate_unique_bucket_name(prefix="static-site"):
     suffix = str(uuid.uuid4())[:8]
     return f"{prefix}-{suffix}"
 
-def create_public_s3_bucket(prefix):
+def create_public_s3_bucket(prefix, region= "ap-south-1"):
     s3 = boto3.client('s3', region_name=REGION)
     bucket_name = generate_unique_bucket_name(prefix)
 
@@ -162,94 +164,109 @@ def wait_for_ssh(ip, port=22, timeout=300):
         try:
             with socket.create_connection((ip, port), timeout=5):
                 print("✅ SSH is ready!")
-                break
+                return
         except (socket.timeout, ConnectionRefusedError, OSError):
             if time.time() - start_time > timeout:
                 raise TimeoutError("❌ Timed out waiting for SSH.")
-            print("🔄 Still waiting...")
+            print("🔄 Still waiting for SSH...")
             time.sleep(5)
 
-def wait_for_docker(ssh, timeout=120):
-
+def wait_for_docker(ip, timeout=120):
+    """Waits until Docker is ready inside EC2 instance."""
     print("⏳ Waiting for Docker to be ready...")
-    for i in range(timeout // 5):
-        stdin, stdout, stderr = ssh.exec_command("sudo docker --version")
-        out = stdout.read().decode()
-        err = stderr.read().decode()
-        if "Docker version" in out:
-            print(f"✅ Docker is ready: {out.strip()}")
-            return True
-        time.sleep(5)
-    raise Exception("❌ Docker did not become ready within timeout.")
-
-
-def upload_and_run_on_ec2(public_ip, zip_path, framework):
-    wait_for_ssh(public_ip)
-    print("🔐 Connecting to EC2...")
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    try:
-        private_key = paramiko.RSAKey.from_private_key_file(KEY_PATH)
-
-        ssh.connect(
-            hostname=public_ip,
-            username='ec2-user',
-            pkey=private_key
+    for _ in range(timeout // 5):
+        result = subprocess.run(
+            [
+                "ssh",
+                "-i", KEY_PATH,
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                f"{REMOTE_USER}@{ip}",
+                "docker --version"
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
-
-        wait_for_docker(ssh)
-        ssh.close()
-
-        print("🔁 Reconnecting to EC2 for proper Docker permissions...")
+        if "Docker version" in result.stdout:
+            print(f"✅ Docker is ready: {result.stdout.strip()}")
+            return
         time.sleep(5)
+    raise Exception("❌ Docker did not become ready in time.")
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        private_key = paramiko.RSAKey.from_private_key_file(KEY_PATH)
-        ssh.connect(hostname=public_ip, username='ec2-user', pkey=private_key)
 
-        print("📦 Uploading app.zip...")
-        with SCPClient(ssh.get_transport()) as scp:
-            scp.put(zip_path, "app.zip")
+def upload_file(ip, local_path, remote_path="app.zip"):
+    """Uploads file to EC2 using SCP."""
+    print(f"📦 Uploading {local_path} to EC2...")
+    result = subprocess.run(
+        [
+            "scp",
+            "-i", KEY_PATH,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            local_path,
+            f"{REMOTE_USER}@{ip}:{remote_path}"
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    if result.returncode != 0:
+        print(result.stderr)
+        raise RuntimeError("❌ Failed to upload file.")
+    else:
+        print("✅ File uploaded.")
 
-        print("⚙️ Running deployment commands...")
 
-        # === 1. UNZIP ===
-        print("💻 Running: unzip app.zip")
-        stdin, stdout, stderr = ssh.exec_command("sudo unzip -o app.zip -d app", get_pty=True)
-        exit_status = stdout.channel.recv_exit_status()
-        print(stdout.read().decode())
-        print(stderr.read().decode())
-        if exit_status != 0:
-            print("❌ Failed: unzip")
-            return
+def run_ssh_command(ip, command):
+    """Runs a single SSH command via subprocess without host key prompts."""
+    ssh_command = [
+        "ssh",
+        "-i", KEY_PATH,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        f"{REMOTE_USER}@{ip}",
+        command
+    ]
 
-        # === 2. DOCKER BUILD ===
-        print("💻 Running: docker build")
-        stdin, stdout, stderr = ssh.exec_command("sudo docker build -t myapp ./app", get_pty=True)
-        exit_status = stdout.channel.recv_exit_status()
-        print(stdout.read().decode())
-        print(stderr.read().decode())
-        if exit_status != 0:
-            print("❌ Failed: docker build")
-            return
+    print(f"💻 Running: {command}")
+    process = subprocess.Popen(
+        ssh_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
+    )
 
-        # === 3. DOCKER RUN ===
-        print("💻 Running: docker run")
-        stdin, stdout, stderr = ssh.exec_command("sudo docker run -d -p 80:3000 myapp", get_pty=True)
-        exit_status = stdout.channel.recv_exit_status()
-        print(stdout.read().decode())
-        print(stderr.read().decode())
-        if exit_status != 0:
-            print("❌ Failed: docker run")
-            return
+    for line in process.stdout:
+        print(line, end="")
 
-        print(f"✅ Deployment complete! App should be live at: http://{public_ip}")
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(f"❌ Command failed: {command}")
 
-    finally:
-        ssh.close()
 
+
+def run_commands(ip, commands):
+    for cmd in commands:
+        run_ssh_command(ip, cmd)
+
+def upload_and_run_on_ec2(public_ip, zip_path, framework=None):
+    print(f"🚀 Starting deployment to EC2 {public_ip}...")
+
+    wait_for_ssh(public_ip)
+    wait_for_docker(public_ip)
+    upload_file(public_ip, zip_path)
+
+    commands = [
+        "sudo systemctl start docker",
+        "while ! sudo docker info > /dev/null 2>&1; do echo '⏳ Waiting for Docker daemon to start...'; sleep 2; done",
+        "sudo unzip -o app.zip -d app",
+        "cd app && sudo docker build -t myapp .",
+        "sudo docker run -d -p 80:3000 myapp"
+    ]
+    run_commands(public_ip, commands)
+
+    print(f"✅ Deployment complete! App should be live at: http://{public_ip}")
 
 
 def delete_s3_bucket(bucket_name):

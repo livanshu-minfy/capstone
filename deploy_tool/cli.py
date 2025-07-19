@@ -7,7 +7,8 @@ import subprocess
 import platform
 import stat
 from pathlib import Path
-
+import boto3
+from botocore.exceptions import ClientError
 from .config import load_config, save_config
 from .aws import rollback_all_resources
 
@@ -222,9 +223,27 @@ CMD ["nginx", "-g", "daemon off;"]
     with open(dockerfile_path, 'w') as f:
         f.write(content)
 
-def deploy_react(project_root, environment):  # <--
+def bucket_exists(bucket_name):
+    """Check if a bucket actually exists in S3."""
+    s3 = boto3.client("s3")
+    try:
+        s3.head_bucket(Bucket=bucket_name)
+        return True
+    except ClientError:
+        return False
+
+def get_bucket_region(bucket_name):
+    """Get the bucket's region or fallback."""
+    s3 = boto3.client("s3")
+    try:
+        response = s3.get_bucket_location(Bucket=bucket_name)
+        loc = response.get("LocationConstraint")
+        return "us-east-1" if loc is None else loc
+    except ClientError:
+        return None
+
+def deploy_react(project_root, environment):
     """🚀 Build & deploy a React project in the given environment."""
-    # NOTE: We *no longer* rely on init-created bucket. We create per-env buckets.  # <--
 
     # 1. Find React project root
     react_path = find_react_project_path(project_root)
@@ -248,22 +267,29 @@ def deploy_react(project_root, environment):  # <--
         click.echo("❌ Build folder not found.")
         return
 
-    # 3. Create (or reuse) env bucket
+    # 3. Create (or verify) env bucket
     state = load_bucket_config()
+    bucket = None
+    region = "ap-south-1"
+
     if state and state.get("env") == environment:
-        bucket = state['bucket']
-        region = state['region']
-        click.echo(f"🔁 Reusing bucket: {bucket} (env={environment})")
-    else:
+        candidate = state.get("bucket")
+        if bucket_exists(candidate):
+            bucket = candidate
+            region = get_bucket_region(candidate) or region
+            click.echo(f"🔁 Reusing bucket: {bucket} (env={environment})")
+        else:
+            click.echo(f"⚠️ Config refers to a deleted/missing bucket: {candidate}. Recreating...")
+    
+    if not bucket:
         click.echo(f"🪣 Creating new bucket for env: {environment}")
-        bucket = create_public_s3_bucket(prefix=f"{environment}-site")
+        bucket = create_public_s3_bucket(prefix=f"{environment}-site", region=region)
         if not bucket:
             click.echo("❌ Failed to create bucket.")
             return
-        region = "ap-south-1"  # TODO: make dynamic  # <--
-        save_bucket_config(bucket, region=region, environment=environment)  # <--
+        save_bucket_config(bucket, region=region, environment=environment)
 
-    # 4. Upload to S3 (AWS CLI handles MIME)
+    # 4. Upload to S3 using AWS CLI
     click.echo("📤 Uploading via AWS CLI using s3 sync...")
     try:
         subprocess.run(
@@ -273,7 +299,7 @@ def deploy_react(project_root, environment):  # <--
             check=True
         )
     except subprocess.CalledProcessError:
-        click.echo("❌ AWS CLI sync failed. Make sure AWS CLI is installed and configured.")
+        click.echo("❌ AWS CLI sync failed. Ensure AWS CLI is installed and configured.")
         return
 
     # 5. Enable website hosting

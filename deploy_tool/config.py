@@ -16,7 +16,7 @@ def load_config():
 
 
 # Extra state file for bucket metadata
-CONFIG_FILE = Path("deploy_tool_state.json")
+CONFIG_FILE = Path("bucket.json")
 
 def load_bucket_config():
     if not CONFIG_FILE.exists():
