@@ -95,6 +95,37 @@ def find_react_project_path(root):
     return None
 
 # ----------------------
+# 🔍 Angular Detector
+# ----------------------
+
+def find_angular_project_path(root):
+    """Recursively search for the first folder containing a package.json with Angular dependencies or angular.json file."""
+    for dirpath, _, filenames in os.walk(root):
+        # First check for angular.json file (Angular CLI configuration)
+        if 'angular.json' in filenames:
+            return dirpath
+            
+        # Also check package.json for Angular dependencies
+        if 'package.json' in filenames:
+            try:
+                with open(os.path.join(dirpath, 'package.json')) as f:
+                    package_data = json.load(f)
+                    deps = package_data.get("dependencies", {})
+                    dev_deps = package_data.get("devDependencies", {})
+                    
+                    # Look for core Angular dependencies
+                    angular_deps = ["@angular/core", "@angular/cli", "@angular/common", "angular"]
+                    
+                    for dep in angular_deps:
+                        if dep in deps or dep in dev_deps:
+                            return dirpath
+                            
+            except Exception:
+                continue
+    return None
+
+
+# ----------------------
 # 📥 Git Cloner
 # ----------------------
 
@@ -165,13 +196,16 @@ def deploy(environment):
         return
 
     if framework == "react":
-        deploy_react(tmp_dir, environment)  # <--
-    elif framework in ("angular", "nextjs"):
+        deploy_react(tmp_dir, environment)
+    elif framework == "angular":
+        deploy_angular(tmp_dir, environment)  # <-- Add this line
+    elif framework == "nextjs":
         deploy_dockerized(tmp_dir, framework, environment)
     else:
         click.echo("❌ Unsupported framework.")
 
-    shutil.rmtree(tmp_dir, ignore_errors=True)  # <--
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
 
 def deploy_dockerized(tmp_dir, framework, environment):
     write_dockerfile(framework, tmp_dir)
@@ -205,15 +239,15 @@ CMD ["npm", "run", "start"]
 """
     elif framework == 'angular':
         content = """\
-FROM node:18-alpine AS builder
+FROM node:20.19.0-slim AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
-RUN npm run build --prod
+RUN npm run build -- --no-progress
 
 FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/dist/* /usr/share/nginx/html/
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 """
@@ -308,6 +342,88 @@ def deploy_react(project_root, environment):
     # 6. Output public URL
     public_url = get_website_url(bucket, region)
     click.echo(f"🌐 Site deployed: {public_url}")
+
+def deploy_angular(project_root, environment):
+    """🚀 Build & deploy an Angular project in the given environment."""
+
+    # 1. Find Angular project root
+    angular_path = find_angular_project_path(project_root)
+    if not angular_path:
+        click.echo("❌ No Angular project found in the repo.")
+        return
+
+    # 2. Build
+    click.echo(f"⚙️ Building Angular app at: {angular_path}")
+    is_windows = platform.system() == "Windows"
+    shell_flag = True if is_windows else False
+    try:
+        subprocess.run(['npm', 'install'], cwd=angular_path, check=True, shell=shell_flag)
+        subprocess.run(
+            ['ng', 'build', '--configuration=production'],
+            cwd=angular_path, check=True, shell=shell_flag
+        )
+    except subprocess.CalledProcessError:
+        click.echo("❌ Build failed. Ensure it's a valid Angular project.")
+        return
+
+    # 3. Locate build output directory containing index.html
+    base_build_dir = os.path.join(angular_path, 'dist')
+    if not os.path.exists(base_build_dir):
+        click.echo("❌ Build folder not found.")
+        return
+
+    def find_index_html_directory(base_path):
+        """Recursively find the directory containing index.html."""
+        for root, dirs, files in os.walk(base_path):
+            if 'index.html' in files:
+                return root
+        return None
+
+    build_dir = find_index_html_directory(base_build_dir)
+    if not build_dir:
+        click.echo("❌ Could not find index.html in build output.")
+        return
+
+    # 4. Create (or verify) env bucket
+    state = load_bucket_config()
+    bucket = None
+    region = "ap-south-1"
+
+    if state and state.get("env") == environment:
+        candidate = state.get("bucket")
+        if bucket_exists(candidate):
+            bucket = candidate
+            region = get_bucket_region(candidate) or region
+            click.echo(f"🔁 Reusing bucket: {bucket} (env={environment})")
+        else:
+            click.echo(f"⚠️ Config refers to a deleted/missing bucket: {candidate}. Recreating...")
+
+    if not bucket:
+        click.echo(f"🪣 Creating new bucket for env: {environment}")
+        bucket = create_public_s3_bucket(prefix=f"{environment}-angular-site", region=region)
+        if not bucket:
+            click.echo("❌ Failed to create bucket.")
+            return
+        save_bucket_config(bucket, region=region, environment=environment)
+
+    # 5. Upload to S3 using AWS CLI
+    click.echo("📤 Uploading via AWS CLI using s3 sync...")
+    try:
+        subprocess.run(
+            ["aws", "s3", "sync", build_dir, f"s3://{bucket}", "--delete"],
+            check=True
+        )
+    except subprocess.CalledProcessError:
+        click.echo("❌ AWS CLI sync failed. Ensure AWS CLI is installed and configured.")
+        return
+
+    # 6. Enable website hosting
+    enable_static_website(bucket)
+
+    # 7. Output public URL
+    public_url = get_website_url(bucket, region)
+    click.echo(f"🌐 Site deployed: {public_url}")
+
 
 # ----------------------
 # 🧹 Rollback Command

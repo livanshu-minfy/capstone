@@ -234,7 +234,8 @@ def run_ssh_command(ip, command):
         ssh_command,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True
+        encoding='utf-8',
+        errors='replace'
     )
 
     for line in process.stdout:
