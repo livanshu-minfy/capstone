@@ -3,6 +3,7 @@ setup.py
 deploy_tool/__init__.py
 deploy_tool/aws.py
 deploy_tool/cli.py
+deploy_tool/config.py
 deploy_tool.egg-info/PKG-INFO
 deploy_tool.egg-info/SOURCES.txt
 deploy_tool.egg-info/dependency_links.txt
