@@ -138,7 +138,7 @@ echo " Docker is ready"
         UserData=user_data
     )[0]
 
-    print("🚀 Waiting for EC2 instance to initialize...")
+    print(" Waiting for EC2 instance to initialize...")
     instance.wait_until_running()
     instance.reload()
 
@@ -188,7 +188,7 @@ def wait_for_docker(ip, timeout=120):
     raise Exception("Docker did not become ready in time.")
 
 def upload_file(ip, local_path, remote_path="app.zip"):
-    print(f"📦 Uploading {local_path} to EC2...")
+    print(f"Uploading {local_path} to EC2...")
     result = subprocess.run(
         [
             "scp",
@@ -219,7 +219,7 @@ def run_ssh_command(ip, command):
         command
     ]
 
-    print(f"💻 Running: {command}")
+    print(f"Running: {command}")
     process = subprocess.Popen(
         ssh_command,
         stdout=subprocess.PIPE,
@@ -242,7 +242,7 @@ def run_commands(ip, commands):
         run_ssh_command(ip, cmd)
 
 def upload_and_run_on_ec2(public_ip, zip_path, framework=None):
-    print(f"🚀 Starting deployment to EC2 {public_ip}...")
+    print(f"Starting deployment to EC2 {public_ip}...")
 
     wait_for_ssh(public_ip)
     wait_for_docker(public_ip)
