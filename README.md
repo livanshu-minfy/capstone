@@ -18,7 +18,7 @@ Deploy-Tool is a feature-rich command-line tool that automates the entire deploy
 - Node.js (version 14 or higher)
 - Python 3.8+
 - AWS CLI installed on your system with valid credentials
-- SSH key pair for EC2 login in your root folder. in my case "livanshu-kp.pem".
+- SSH key pair for EC2 login in deploy-tool folder. in my case "livanshu-kp.pem".
 ## Installation
 ### From Source
 git clone https://github.com/livanshu-minfy/capstone
