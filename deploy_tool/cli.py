@@ -538,6 +538,40 @@ def deploy_react_vite(project_root, environment):
     click.echo(f"🌐 Site deployed: {public_url}")
 
 
+
+
+
+
+@cli.command()
+def status():
+    """🧪 Check deployment status (S3/EC2)"""
+    from deploy_tool.monitor.status import check_status
+    check_status()
+
+@cli.group()
+def monitor():
+    """📈 Monitor EC2-hosted apps with Prometheus + Grafana"""
+    pass
+
+@monitor.command()
+def init():
+    """🚀 Provisions EC2 with Prometheus + Grafana for monitoring."""
+    default_instance_type = "t3.small"
+    click.echo(f"📡 Setting up monitoring stack on EC2 ({default_instance_type})...")
+    from deploy_tool.monitor.ec2_monitor import provision_monitoring_instance
+    provision_monitoring_instance(default_instance_type)
+
+@monitor.command()
+def dashboard():
+    """📊 View monitoring dashboard (Grafana)."""
+    from deploy_tool.monitor.dashboard import show_monitoring_dashboard
+    show_monitoring_dashboard()
+
+
+
+
+
+
 # ----------------------
 # 🧹 Rollback Command
 # ----------------------
