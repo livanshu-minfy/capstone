@@ -61,7 +61,7 @@ def provision_monitoring_instance(instance_type):
     instance = ec2.create_instances(
         ImageId=AMI_ID,
         InstanceType=instance_type,
-        KeyName="livanshu-kp",  # 🔐 Update if keypair name changes
+        KeyName="livanshu-kp",
         MinCount=1,
         MaxCount=1,
         SecurityGroupIds=[sg.id],

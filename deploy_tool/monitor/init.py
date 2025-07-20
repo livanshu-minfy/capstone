@@ -31,7 +31,7 @@ docker run -d --name grafana -p {GRAFANA_PORT}:3000 grafana/grafana
             'Tags': [{'Key': 'Name', 'Value': MONITOR_INSTANCE_NAME}]
         }],
         SecurityGroups=["default"],
-        UserData=user_data_script  # ✅ Must be set here
+        UserData=user_data_script 
     )[0]
 
     instance.wait_until_running()
