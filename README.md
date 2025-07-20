@@ -85,6 +85,14 @@ The tool autonomously identifies frameworks based on:
 - Containerization and Orchestration support using docker and Kubernetes.
 - serverless deployment using aws lambda.
 
+### CLI screenshots of the whole deployment process
+## react + vite app example
+<img width="1079" height="199" alt="image" src="https://github.com/user-attachments/assets/efde3fc4-ead8-46cd-ae7b-137aa5d4e739" />
+<img width="1197" height="237" alt="image" src="https://github.com/user-attachments/assets/a5380ce7-abbc-43e0-b0bb-f4308e4cb3fa" />
+<img width="1343" height="278" alt="image" src="https://github.com/user-attachments/assets/e1d7af05-e9f9-4ba7-ad0e-b4fff7d13985" />
+<img width="1906" height="1019" alt="image" src="https://github.com/user-attachments/assets/05b5e2cf-e16e-4682-bc08-65590694c150" />
+<img width="881" height="133" alt="image" src="https://github.com/user-attachments/assets/4a7e6778-3950-4b2d-afa7-a923e64840b5" />
+
 NOTE FOR THE READER - 
 
 since i was alloted to work in ap-south-1, so i have used that as default region.
