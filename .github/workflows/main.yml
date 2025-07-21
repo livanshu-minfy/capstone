@@ -45,7 +45,18 @@ jobs:
           pip install -r requirements.txt || true
           pip install -e .
 
-      # 3. Configure AWS credentials
+      # 3. Setup SSH key for EC2 access
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/livanshu-kp.pem
+          chmod 600 ~/.ssh/livanshu-kp.pem
+          # Also copy to the deploy_tool directory where your code expects it
+          mkdir -p deploy_tool
+          cp ~/.ssh/livanshu-kp.pem deploy_tool/livanshu-kp.pem
+          chmod 600 deploy_tool/livanshu-kp.pem
+
+      # 4. Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -54,29 +65,29 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 4. Initialize CLI
+      # 5. Initialize CLI
       - name: deploy-tool init
         run: |
           deploy-tool init https://github.com/pandeyshivam-debug/recipe-finder-react
 
-      # 5. Deploy to S3
+      # 6. Deploy to S3
       - name: deploy-tool deploy
         run: |
           deploy-tool deploy ${{ env.DEPLOY_ENV }}
 
-      # 6. Conditional rollback
+      # 7. Conditional rollback
       - name: deploy-tool rollback
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'rollback' }}
         run: |
           deploy-tool rollback
 
-      # 7. Provision monitoring stack on EC2 using your AMI
+      # 8. Provision monitoring stack on EC2 using your AMI
       - name: deploy-tool monitor init
         run: |
           deploy-tool monitor init --ami ${{ env.MONITOR_AMI }}
 
-      # 8. Output monitoring endpoints
+      # 9. Output monitoring endpoints
       - name: Show monitoring endpoints
         run: |
-          echo "Grafana URL: $(deploy-tool monitor dashboard-url)"
-          echo "Prometheus URL: $(deploy-tool monitor prometheus-url)"
+          echo "Grafana URL: $(deploy-tool monitor dashboard-url)" || echo "Dashboard URL command not available"
+          echo "Prometheus URL: $(deploy-tool monitor prometheus-url)" || echo "Prometheus URL command not available"
