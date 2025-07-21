@@ -51,7 +51,6 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/livanshu-kp.pem
           chmod 600 ~/.ssh/livanshu-kp.pem
-          # Also copy to the deploy_tool directory where your code expects it
           mkdir -p deploy_tool
           cp ~/.ssh/livanshu-kp.pem deploy_tool/livanshu-kp.pem
           chmod 600 deploy_tool/livanshu-kp.pem
@@ -73,7 +72,10 @@ jobs:
       # 6. Deploy to S3
       - name: deploy-tool deploy
         run: |
-          deploy-tool deploy ${{ env.DEPLOY_ENV }}
+          # Ensure a valid environment argument
+          ENV="${{ github.event.inputs.env || 'prod' }}"
+          echo "▶ Deploying to environment: $ENV"
+          deploy-tool deploy "$ENV"
 
       # 7. Conditional rollback
       - name: deploy-tool rollback
@@ -89,5 +91,9 @@ jobs:
       # 9. Output monitoring endpoints
       - name: Show monitoring endpoints
         run: |
-          echo "Grafana URL: $(deploy-tool monitor dashboard-url)" || echo "Dashboard URL command not available"
-          echo "Prometheus URL: $(deploy-tool monitor prometheus-url)" || echo "Prometheus URL command not available"
+          OUTPUT="$(deploy-tool monitor init --ami ${{ env.MONITOR_AMI }} 2>&1)"
+          echo "$OUTPUT"
+          GRAFANA_URL="$(echo "$OUTPUT" | grep -Eo 'http://[^ ]+:3000')"
+          PROM_URL="$(echo "$OUTPUT" | grep -Eo 'http://[^ ]+:9090')"
+          echo "🔗 Grafana URL: $GRAFANA_URL"
+          echo "📊 Prometheus URL: $PROM_URL"
