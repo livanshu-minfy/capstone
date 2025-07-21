@@ -19,7 +19,6 @@ permissions:
 env:
   AWS_REGION: ap-south-1
   DEPLOY_ENV: ${{ github.event.inputs.env }}
-  MONITOR_AMI: ami-0b09627181c8d5778
 
 jobs:
   build-deploy-monitor:
@@ -59,10 +58,10 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
 
       # 5. Initialize CLI
       - name: deploy-tool init
@@ -72,7 +71,6 @@ jobs:
       # 6. Deploy to S3
       - name: deploy-tool deploy
         run: |
-          # Ensure a valid environment argument
           ENV="${{ github.event.inputs.env || 'prod' }}"
           echo "▶ Deploying to environment: $ENV"
           deploy-tool deploy "$ENV"
@@ -83,17 +81,17 @@ jobs:
         run: |
           deploy-tool rollback
 
-      # 8. Provision monitoring stack on EC2 using your AMI
-      - name: deploy-tool monitor init
+      # 8. Provision monitoring stack on EC2
+      - name: Provision monitoring stack
+        id: monitor
         run: |
-          deploy-tool monitor init --ami ${{ env.MONITOR_AMI }}
+          OUTPUT="$(deploy-tool monitor init)"
+          echo "$OUTPUT"
+          echo "::set-output name=grafana::$(echo \"$OUTPUT\" | grep -Eo 'http://[^ ]+:3000')"
+          echo "::set-output name=prometheus::$(echo \"$OUTPUT\" | grep -Eo 'http://[^ ]+:9090')"
 
       # 9. Output monitoring endpoints
       - name: Show monitoring endpoints
         run: |
-          OUTPUT="$(deploy-tool monitor init --ami ${{ env.MONITOR_AMI }} 2>&1)"
-          echo "$OUTPUT"
-          GRAFANA_URL="$(echo "$OUTPUT" | grep -Eo 'http://[^ ]+:3000')"
-          PROM_URL="$(echo "$OUTPUT" | grep -Eo 'http://[^ ]+:9090')"
-          echo "🔗 Grafana URL: $GRAFANA_URL"
-          echo "📊 Prometheus URL: $PROM_URL"
+          echo "Grafana URL: ${{ steps.monitor.outputs.grafana }}"
+          echo "Prometheus URL: ${{ steps.monitor.outputs.prometheus }}"
