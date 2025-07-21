@@ -10,8 +10,12 @@ from botocore.exceptions import ClientError
 from .config import load_bucket_config, CONFIG_FILE
 
 REGION = "ap-south-1"
-KEY_PATH = "./livanshu-kp.pem"
-os.chmod(KEY_PATH, 0o400)
+KEY_PATH = os.path.join(os.path.dirname(__file__), "livanshu-kp.pem")
+if os.path.isfile(KEY_PATH):
+    os.chmod(KEY_PATH, 0o400)
+else:
+    raise FileNotFoundError(f"SSH key not found at {KEY_PATH}")
+
 REMOTE_USER = "ec2-user"
 
 def generate_unique_bucket_name(prefix="static-site"):
