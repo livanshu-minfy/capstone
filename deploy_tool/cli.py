@@ -5,9 +5,11 @@ import os
 import shutil
 import subprocess
 import platform
+import time
 import stat
 from pathlib import Path
 import boto3
+import requests
 from botocore.exceptions import ClientError
 from .config import load_config, save_config
 from .aws import rollback_all_resources
@@ -203,7 +205,7 @@ def detect_framework(project_path):
 def deploy(environment):
     config = load_config()
     if not config:
-        click.echo("❌ Run 'deploy-tool init <repo_url>' first.")
+        click.echo("Run 'deploy-tool init <repo_url>' first.")
         return
 
     repo_url = config["repo_url"]
@@ -212,7 +214,7 @@ def deploy(environment):
 
     click.echo(f"Cloning repo: {repo_url}")
     if not clone_repository(repo_url, tmp_dir):
-        click.echo("❌ Failed to clone repo.")
+        click.echo("Failed to clone repo.")
         return
 
     if framework == "react":
@@ -486,14 +488,14 @@ def deploy_react_vite(project_root, environment):
     click.echo(f"Site deployed: {public_url}")
 
 
-@cli.command()
-def status():
-    click.echo(f"have to implement this logic, sorry")
-
 @cli.group()
 def monitor():
-    
     pass
+
+@monitor.command()
+def status():
+    click.echo(f"have to implement this logic in future, sorry")
+
 
 @monitor.command()
 def init():
@@ -503,10 +505,306 @@ def init():
     from deploy_tool.monitor.ec2_monitor import provision_monitoring_instance
     provision_monitoring_instance(default_instance_type)
 
-@monitor.command()
-def dashboard():
-    click.echo(f"have to implement this logic, sorry")
+from deploy_tool.monitor.monitor_config import get_monitor_instance_config
 
+@monitor.command("dashboard")
+@click.pass_context
+def create_dashboard(ctx):
+    """Create and update Grafana dashboard with app link if S3 deployed."""
+    import requests
+    import json
+    import os
+    from pathlib import Path
+    
+
+    config = get_monitor_instance_config()
+    ip = config["public_ip"]
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    auth = ('admin', 'admin')
+
+    s3_app_url = None
+    try:
+        bucket_json_path = Path.home() / ".deploy-tool" / "bucket.json"
+        if bucket_json_path.exists():
+            with open(bucket_json_path) as f:
+                bucket_config = json.load(f)
+                bucket = bucket_config["bucket"]
+                region = bucket_config["region"]
+                s3_app_url = f"https://{bucket}.s3.{region}.amazonaws.com/index.html"
+    except Exception as e:
+        click.echo(f"⚠️ Warning: Could not read S3 link: {e}")
+
+    
+    uid = get_prometheus_uid()
+    panels = []
+
+# CPU Usage Panel
+    panels.append({
+        "type": "timeseries",
+        "title": "CPU Usage (%)",
+        "datasource": {
+            "type": "prometheus",
+            "uid": uid
+        },
+        "targets": [
+            {
+                "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+                "legendFormat": "{{instance}}",
+                "refId": "A"
+            }
+        ],
+        "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+        "fieldConfig": {
+            "defaults": {
+                "unit": "percent",
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "green", "value": None},
+                        {"color": "orange", "value": 70},
+                        {"color": "red", "value": 90}
+                    ]
+                }
+            },
+            "overrides": []
+        },
+        "options": {
+            "legend": {
+                "displayMode": "table",
+                "placement": "bottom"
+            },
+            "tooltip": {
+                "mode": "single"
+            }
+        }
+    })
+
+    # Memory Usage Panel
+    panels.append({
+        "type": "timeseries",
+        "title": "Memory Usage (%)",
+        "datasource": {
+            "type": "prometheus",
+            "uid": uid
+        },
+        "targets": [
+            {
+                "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+                "legendFormat": "{{instance}}",
+                "refId": "B"
+            }
+        ],
+        "gridPos": {"x": 0, "y": 8, "w": 24, "h": 8},
+        "fieldConfig": {
+            "defaults": {
+                "unit": "percent",
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "green", "value": None},
+                        {"color": "orange", "value": 70},
+                        {"color": "red", "value": 90}
+                    ]
+                }
+            },
+            "overrides": []
+        },
+        "options": {
+            "legend": {
+                "displayMode": "table",
+                "placement": "bottom"
+            },
+            "tooltip": {
+                "mode": "single"
+            }
+        }
+    })
+
+    # Disk Usage Panel
+    panels.append({
+        "type": "timeseries",
+        "title": "Disk Usage (%)",
+        "datasource": {
+            "type": "prometheus",
+            "uid": uid
+        },
+        "targets": [
+            {
+                "expr": "(node_filesystem_size_bytes{mountpoint!=\"/boot\",fstype!~\"tmpfs|overlay\"} - node_filesystem_free_bytes{mountpoint!=\"/boot\",fstype!~\"tmpfs|overlay\"}) / node_filesystem_size_bytes{mountpoint!=\"/boot\",fstype!~\"tmpfs|overlay\"} * 100",
+                "legendFormat": "{{instance}} {{mountpoint}}",
+                "refId": "C"
+            }
+        ],
+        "gridPos": {"x": 0, "y": 16, "w": 24, "h": 8},
+        "fieldConfig": {
+            "defaults": {
+                "unit": "percent",
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "green", "value": None},
+                        {"color": "orange", "value": 70},
+                        {"color": "red", "value": 90}
+                    ]
+                }
+            },
+            "overrides": []
+        },
+        "options": {
+            "legend": {
+                "displayMode": "table",
+                "placement": "bottom"
+            },
+            "tooltip": {
+                "mode": "single"
+            }
+        }
+    })
+
+    # Network Traffic Panel
+    panels.append({
+        "type": "timeseries",
+        "title": "Network Traffic (Bytes/sec)",
+        "datasource": {
+            "type": "prometheus",
+            "uid": uid
+        },
+        "targets": [
+            {
+                "expr": "rate(node_network_receive_bytes_total[5m])",
+                "legendFormat": "{{instance}} RX",
+                "refId": "D"
+            },
+            {
+                "expr": "rate(node_network_transmit_bytes_total[5m])",
+                "legendFormat": "{{instance}} TX",
+                "refId": "E"
+            }
+        ],
+        "gridPos": {"x": 0, "y": 24, "w": 24, "h": 8},
+        "fieldConfig": {
+            "defaults": {
+                "unit": "Bps",
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        {"color": "green", "value": None},
+                        {"color": "orange", "value": 1000000},
+                        {"color": "red", "value": 10000000}
+                    ]
+                }
+            },
+            "overrides": []
+        },
+        "options": {
+            "legend": {
+                "displayMode": "table",
+                "placement": "bottom"
+            },
+            "tooltip": {
+                "mode": "single"
+            }
+        }
+    })
+
+    dashboard_payload = {
+        "dashboard": {
+            "id": None,
+            "uid": "auto-metrics",
+            "title": "Auto Monitoring Dashboard",
+            "tags": ["auto-generated"],
+            "timezone": "browser",
+            "panels": panels,
+            "schemaVersion": 36,
+            "version": 1
+        },
+        "overwrite": True
+    }
+
+
+
+    url = f"http://{ip}:3000/api/dashboards/db"
+    response = requests.post(url, headers=headers, json=dashboard_payload, auth=auth)
+
+    if response.status_code == 200:
+        click.echo("Grafana dashboard created successfully!")
+        click.echo(f"View it at: http://{ip}:3000/d/auto-metrics/auto-monitoring-dashboard")
+    else:
+        click.echo(f"❌ Failed to create dashboard: {response.status_code}")
+        click.echo(response.text)
+
+
+def get_stored_grafana_url():
+    metadata_file = os.path.expanduser("~/.deploy_tool/monitor.json")
+    if not os.path.exists(metadata_file):
+        raise Exception("No monitoring metadata found. Did you run `deploy-tool monitor init`?")
+    
+    with open(metadata_file) as f:
+        data = json.load(f)
+        return data.get("grafana_url")
+
+def get_prometheus_uid():
+    config = get_monitor_instance_config()
+    ip = config["public_ip"]
+    
+    headers = {"Content-Type": "application/json"}
+    auth = ("admin", "admin")
+    
+    # Wait for Grafana to be ready
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            # First check if Prometheus datasource exists
+            response = requests.get(
+                f"http://{ip}:3000/api/datasources",
+                headers=headers,
+                auth=auth
+            )
+            response.raise_for_status()
+            
+            # Look for existing Prometheus datasource
+            datasources = response.json()
+            for ds in datasources:
+                if ds["type"] == "prometheus":
+                    click.echo("Found existing Prometheus datasource")
+                    return ds["uid"]
+            
+            # If we get here, no Prometheus found - let's create it
+            click.echo("Creating Prometheus datasource...")
+            datasource_payload = {
+                "name": "Prometheus",
+                "type": "prometheus",
+                "url": "http://prometheus:9090",
+                "access": "proxy",
+                "isDefault": True,
+                "jsonData": {
+                    "timeInterval": "15s"
+                }
+            }
+            
+            create_response = requests.post(
+                f"http://{ip}:3000/api/datasources",
+                headers=headers,
+                auth=auth,
+                json=datasource_payload
+            )
+            create_response.raise_for_status()
+            
+            new_datasource = create_response.json()
+            click.echo("Prometheus datasource created successfully")
+            return new_datasource["datasource"]["uid"]
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise Exception("Failed to setup Prometheus datasource after multiple attempts") from e
+            click.echo(f"Attempt {attempt + 1}: Waiting for Grafana API...")
+            time.sleep(10)
+            
+    raise Exception("Could not setup Prometheus datasource")
 
 @cli.command() 
 def rollback():
