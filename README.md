@@ -40,11 +40,27 @@ Carries out deployment procedure according to the auto selected framework and se
 **Example:**
 deploy-tool deploy staging
 
-### Start Monitoring
-deploy-tool monitor init
-Installs Prometheus and Grafana monitoring stack on the EC2 instance with Docker containers. Returns public URLs of monitoring dashboards.
-WIP - work in progress.
-**my learning:** Static sites hosted on S3 (React, Angular, React + Vite) don'thave metrics endpoints and can't be monitored using traditional application monitoring.
+## Monitoring
+
+### Monitoring Infrastructure Provisioning
+**Command:** `deploy-tool monitor init`
+
+This command provisions a dedicated EC2 instance with a complete monitoring stack including:
+- **Prometheus**: Time-series database for metrics collection and storage
+- **Grafana**: Visualization and dashboard platform for monitoring data
+- **Node Exporter**: System-level metrics collection for infrastructure monitoring
+- **Blackbox Exporter**: Network probe monitoring for endpoint availability and response times
+
+### Accessing Monitoring Dashboard
+**Command:** `deploy-tool monitor dashboard`
+
+After the monitoring infrastructure is provisioned, this command provides you with an accessible link to the Grafana dashboard.
+
+### Integration Status
+- **Current Implementation**: Full monitoring stack deployment for EC2-based applications
+- **Work in Progress**: Integration of s3 in monitoring setup.
+
+
 ### Rollback Deployment
 deploy-tool rollback
 Shuts down all AWS resources established during the deployment process, such as EC2 instances, S3 buckets, and security groups.
@@ -62,7 +78,8 @@ Shuts down all AWS resources established during the deployment process, such as 
 5. **Container Build**: Application containerized using generated Dockerfile
 6. **Service Exposure**: Public-facing URL provided for application access
 
-<img width="654" height="658" alt="image" src="https://github.com/user-attachments/assets/9a8068ac-cf1a-4f07-ae24-de768138ea99" />
+<img width="632" height="746" alt="image" src="https://github.com/user-attachments/assets/1ce7ba6c-960f-4b73-955b-efe3f130911f" />
+
 
 ### Framework Detection Logic
 The tool autonomously identifies frameworks based on:
