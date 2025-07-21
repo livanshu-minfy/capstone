@@ -1,0 +1,72 @@
+name: CI/CD – deploy-tool pipeline
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Deployment environment (dev / staging / prod / rollback)"
+        required: false
+        default: "prod"
+
+permissions:
+  id-token: write          
+  contents: read             
+
+env:
+  AWS_REGION: ap-south-1
+  DEPLOY_ENV: ${{ github.event.inputs.env }}
+
+jobs:
+  build-deploy-monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: deploy-tool-${{ github.run_id }}
+
+      - name: deploy-tool init
+        run: |
+          deploy-tool init https://github.com/your-org/your-repo.git
+
+      - name: deploy-tool deploy
+        run: |
+          deploy-tool deploy ${{ env.DEPLOY_ENV }}
+
+      - name: Conditional rollback
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'rollback' }}
+        run: |
+          deploy-tool rollback
+
+      - name: Provision monitoring stack
+        run: |
+          deploy-tool monitor init
+
+      - name: Display monitoring URLs
+        run: |
+          echo "• Grafana URL: $(deploy-tool monitor dashboard-url)"
+          echo "• Prometheus URL: $(deploy-tool monitor prometheus-url)"
