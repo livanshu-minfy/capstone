@@ -1,4 +1,4 @@
-name: CI/CD – deploy-tool pipeline
+name: CI / CD – deploy-tool static-site pipeline
 
 on:
   push:
@@ -13,12 +13,13 @@ on:
         default: "prod"
 
 permissions:
-  id-token: write          
-  contents: read             
+  id-token: write
+  contents: read
 
 env:
   AWS_REGION: ap-south-1
   DEPLOY_ENV: ${{ github.event.inputs.env }}
+  MONITOR_AMI: ami-0b09627181c8d5778
 
 jobs:
   build-deploy-monitor:
@@ -26,22 +27,24 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
+      # 2. Setup Python & install CLI
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-
-      - name: Install dependencies
+      - name: Install project dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt || true
           pip install -e .
 
+      # 3. Configure AWS OIDC
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -49,24 +52,29 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: deploy-tool-${{ github.run_id }}
 
+      # 4. Initialize CLI
       - name: deploy-tool init
         run: |
-          deploy-tool init https://github.com/your-org/your-repo.git
+          deploy-tool init https://github.com/pandeyshivam-debug/recipe-finder-react
 
+      # 5. Deploy to S3
       - name: deploy-tool deploy
         run: |
           deploy-tool deploy ${{ env.DEPLOY_ENV }}
 
-      - name: Conditional rollback
+      # 6. Conditional rollback
+      - name: deploy-tool rollback
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'rollback' }}
         run: |
           deploy-tool rollback
 
-      - name: Provision monitoring stack
+      # 7. Provision monitoring stack on EC2 using your AMI
+      - name: deploy-tool monitor init
         run: |
-          deploy-tool monitor init
+          deploy-tool monitor init --ami ${{ env.MONITOR_AMI }}
 
-      - name: Display monitoring URLs
+      # 8. Output monitoring endpoints
+      - name: Show monitoring endpoints
         run: |
-          echo "• Grafana URL: $(deploy-tool monitor dashboard-url)"
-          echo "• Prometheus URL: $(deploy-tool monitor prometheus-url)"
+          echo "Grafana URL: $(deploy-tool monitor dashboard-url)"
+          echo "Prometheus URL: $(deploy-tool monitor prometheus-url)"
