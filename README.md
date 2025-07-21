@@ -62,6 +62,7 @@ Shuts down all AWS resources established during the deployment process, such as 
 5. **Container Build**: Application containerized using generated Dockerfile
 6. **Service Exposure**: Public-facing URL provided for application access
 
+<img width="654" height="658" alt="image" src="https://github.com/user-attachments/assets/9a8068ac-cf1a-4f07-ae24-de768138ea99" />
 
 ### Framework Detection Logic
 The tool autonomously identifies frameworks based on:
